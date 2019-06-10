@@ -160,6 +160,7 @@ export function findTypesContainingFieldWithReturnType(
   schema: GraphQLSchema,
   node: GraphQLField<any, any>,
 ): GraphQLObjectType[] {
+  console.log(getNamedType(node.type));
   if (!isObjectType(getNamedType(node.type))) return [];
   const returnType = getNamedType(node.type);
   if (!isObjectType(returnType)) return [];

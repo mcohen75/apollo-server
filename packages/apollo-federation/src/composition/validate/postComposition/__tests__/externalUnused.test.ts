@@ -173,4 +173,31 @@ describe('externalUnused', () => {
     const warnings = validateExternalUnused(schema);
     expect(warnings).toEqual([]);
   });
+
+  fit('doesnt warn when valid @external fields are the only fields in a type', () => {
+    const serviceA = {
+      typeDefs: gql`
+        extend type Query {
+          me: User
+        }
+
+        extend type Kitchen @key(fields: "id") {
+          id: ID! @external
+          name: String @external
+        }
+
+        type User @key(fields: "username") {
+          username: ID!
+          firstName: String!
+          kitchen: Kitchen @provides(fields: "name")
+          lastName: String!
+        }
+      `,
+      name: 'serviceA',
+    };
+
+    const { schema, errors } = composeServices([serviceA]); //serviceB, serviceC]);
+    const warnings = validateExternalUnused(schema);
+    expect(warnings).toEqual([]);
+  });
 });

@@ -1,4 +1,9 @@
-import { GraphQLSchema, isObjectType, GraphQLError } from 'graphql';
+import {
+  GraphQLSchema,
+  isObjectType,
+  GraphQLError,
+  getNamedType,
+} from 'graphql';
 
 import {
   findDirectivesOnTypeOrField,
@@ -18,27 +23,67 @@ export const externalUnused = (schema: GraphQLSchema) => {
   for (const [typeName, namedType] of Object.entries(types)) {
     // Only object types have fields
     if (!isObjectType(namedType)) continue;
-
     // If externals is populated, we need to look at each one and confirm
     // it is used
     if (namedType.federation && namedType.federation.externals) {
+      const keySelections = namedType.federation.keys;
+
       // loop over every service that has extensions with @external
       for (const [serviceName, externalFieldsForService] of Object.entries(
         namedType.federation.externals,
       )) {
+        const keysForService = keySelections[serviceName];
         // for a single service, loop over the external fields.
         for (const { field: externalField } of externalFieldsForService) {
           const externalFieldName = externalField.name.value;
           const allFields = namedType.getFields();
 
+          // check the selected fields of every @key provided by `serviceName`
           const hasMatchingKeyOnType = Boolean(
-            hasMatchingFieldInDirectives({
-              directives: findDirectivesOnTypeOrField(namedType.astNode, 'key'),
-              fieldNameToMatch: externalFieldName,
-              namedType,
-            }),
+            keysForService &&
+              keysForService
+                .flat()
+                .find(
+                  selectedField =>
+                    selectedField.name.value === externalFieldName,
+                ),
           );
 
+          /**
+           * Provides exists on a _field_ that returns a type which is defined by an extension
+           * extend type Kitchen {
+           *   name: String @external
+           * }
+           *
+           * type User {
+           *   kitchen: Kitchen @provides(fields: "name)
+           * }
+           *
+           * Here, we have the external field. We want to search the schema for
+           * the return type of the PARENT of the external field (Kitchen)
+           *
+           * If we find a field that has the correct return, we should check the provides
+           * to see if the current external field is selected
+           */
+          if (externalField.name.value === 'name') {
+            console.log(getNamedType(externalField));
+            const hasMatchingProvides = findTypesContainingFieldWithReturnType(
+              schema,
+              externalField,
+            ).map(childType => {
+              const fields = childType.getFields();
+              Object.values(fields).forEach(maybeProvidesFieldFromChildType => {
+                providesDirectives = providesDirectives.concat(
+                  findDirectivesOnTypeOrField(
+                    maybeProvidesFieldFromChildType.astNode,
+                    'provides',
+                  ),
+                );
+              });
+            });
+          }
+
+          // console.log({ namedType, allFields, hasMatchingProvides });
           const hasMatchingProvidesOrRequires = Object.values(allFields).some(
             maybeProvidesField => {
               const fieldOwner =
@@ -71,6 +116,7 @@ export const externalUnused = (schema: GraphQLSchema) => {
                   reviews: [Review]
                 }
               */
+
               findTypesContainingFieldWithReturnType(
                 schema,
                 maybeProvidesField,
