@@ -16,6 +16,8 @@ import {
   DocumentNode,
   GraphQLObjectType,
   specifiedDirectives,
+  EnumValueDefinitionNode,
+  EnumTypeDefinitionNode,
 } from 'graphql';
 import { mapValues } from 'apollo-env';
 import { transformSchema } from 'apollo-graphql';
@@ -27,6 +29,8 @@ import {
   parseSelections,
   mapFieldNamesToServiceName,
   stripExternalFieldsFromTypeDefs,
+  errorWithCode,
+  logServiceAndType,
 } from './utils';
 import {
   ServiceDefinition,
@@ -36,10 +40,15 @@ import {
 } from './types';
 import { validateSDL } from 'graphql/validation/validate';
 import { compositionRules } from './rules';
+import { isString } from 'util';
 
 // Map of all definitions to eventually be passed to extendSchema
+interface DefinitionsMapEntry {
+  definition: TypeDefinitionNode;
+  serviceName: string | null;
+}
 interface DefinitionsMap {
-  [name: string]: TypeDefinitionNode[];
+  [name: string]: DefinitionsMapEntry[];
 }
 // Map of all extensions to eventually be passed to extendSchema
 interface ExtensionsMap {
@@ -157,9 +166,17 @@ export function buildMapsFromServiceList(serviceList: ServiceDefinition[]) {
          * take precedence). If not, create the definitions array and add it to the definitionsMap.
          */
         if (definitionsMap[typeName]) {
-          definitionsMap[typeName].push(definition);
+          definitionsMap[typeName].push({
+            definition,
+            serviceName,
+          });
         } else {
-          definitionsMap[typeName] = [definition];
+          definitionsMap[typeName] = [
+            {
+              definition,
+              serviceName,
+            },
+          ];
         }
       } else if (isTypeExtensionNode(definition)) {
         const typeName = definition.name.value;
@@ -237,9 +254,12 @@ export function buildMapsFromServiceList(serviceList: ServiceDefinition[]) {
     if (!definitionsMap[extensionTypeName]) {
       definitionsMap[extensionTypeName] = [
         {
-          kind: Kind.OBJECT_TYPE_DEFINITION,
-          name: { kind: Kind.NAME, value: extensionTypeName },
-          fields: [],
+          definition: {
+            kind: Kind.OBJECT_TYPE_DEFINITION,
+            name: { kind: Kind.NAME, value: extensionTypeName },
+            fields: [],
+          },
+          serviceName: null,
         },
       ];
 
@@ -258,6 +278,82 @@ export function buildMapsFromServiceList(serviceList: ServiceDefinition[]) {
   };
 }
 
+const checkEnumsForMatches = (
+  definitionsMap: DefinitionsMap,
+): GraphQLError[] => {
+  const errors: GraphQLError[] = [];
+
+  function isEnumDefinition(entry: DefinitionsMapEntry) {
+    return entry.definition.kind === Kind.ENUM_TYPE_DEFINITION;
+  }
+
+  for (const [name, definitions] of Object.entries(definitionsMap)) {
+    // if every definition in the list is an enum, we don't need to error about type
+    if (definitions.every(isEnumDefinition)) {
+      let simpleEnumDefs: Array<{ serviceName: string; values: string[] }> = [];
+      definitions.map(({ definition, serviceName }) => {
+        const enumValues = (definition as EnumTypeDefinitionNode).values;
+        if (serviceName && enumValues)
+          simpleEnumDefs.push({
+            serviceName,
+            values: enumValues.map(
+              (enumValue: EnumValueDefinitionNode) => enumValue.name.value,
+            ),
+          });
+      });
+      simpleEnumDefs.map(enumDef => {
+        enumDef.values = enumDef.values.sort();
+      });
+
+      // like {"FURNITURE,BOOK": ["ServiceA", "ServiceB"]}
+      let matchingEnumGroups: { [values: string]: string[] } = {};
+      simpleEnumDefs.map(def => {
+        const key = def.values.join();
+        if (matchingEnumGroups[key]) {
+          matchingEnumGroups[key].push(def.serviceName);
+        } else {
+          matchingEnumGroups[key] = [def.serviceName];
+        }
+      });
+      if (Object.keys(matchingEnumGroups).length > 1) {
+        errors.push(
+          errorWithCode(
+            'ENUM_MISMATCH',
+            `Enums do not have the same values across services. Groups of services with matching enum values are: ${Object.values(
+              matchingEnumGroups,
+            )
+              .map(serviceNames => `[${serviceNames.join(', ')}]`)
+              .join(', ')}`,
+          ),
+        );
+      }
+    } else if (definitions.some(isEnumDefinition)) {
+      // if only some definitions in the list are enums, we need to error
+      // first, find the services, where the defs ARE enums
+      const servicesWithEnum = definitions
+        .filter(isEnumDefinition)
+        .map(definition => definition.serviceName)
+        .filter(isString);
+
+      // find the services where the def isn't an enum
+      const servicesWithoutEnums = definitions
+        .filter(d => !isEnumDefinition(d))
+        .map(d => d.serviceName);
+
+      errors.push(
+        errorWithCode(
+          'ENUM_MISMATCH_TYPE',
+          logServiceAndType(servicesWithEnum[0], name) +
+            `${name} is an enum in [${servicesWithEnum.join(
+              ', ',
+            )}], but not in [${servicesWithoutEnums.join(', ')}]`,
+        ),
+      );
+    }
+  }
+  return errors;
+};
+
 export function buildSchemaFromDefinitionsAndExtensions({
   definitionsMap,
   extensionsMap,
@@ -266,6 +362,10 @@ export function buildSchemaFromDefinitionsAndExtensions({
   extensionsMap: ExtensionsMap;
 }) {
   let errors: GraphQLError[] | undefined = undefined;
+
+  // check enum definitions to make sure they all match across services.
+  errors = checkEnumsForMatches(definitionsMap);
+
   let schema = new GraphQLSchema({
     query: undefined,
     directives: [...specifiedDirectives, ...federationDirectives],
@@ -274,10 +374,12 @@ export function buildSchemaFromDefinitionsAndExtensions({
   // Extend the blank schema with the base type definitions (as an AST node)
   const definitionsDocument: DocumentNode = {
     kind: Kind.DOCUMENT,
-    definitions: Object.values(definitionsMap).flat(),
+    definitions: Object.values(definitionsMap)
+      .flat()
+      .map(({ definition }) => definition),
   };
 
-  errors = validateSDL(definitionsDocument, schema, compositionRules);
+  errors.push(...validateSDL(definitionsDocument, schema, compositionRules));
   schema = extendSchema(schema, definitionsDocument, { assumeValidSDL: true });
 
   // Extend the schema with the extension definitions (as an AST node)

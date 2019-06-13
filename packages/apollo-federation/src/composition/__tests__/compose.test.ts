@@ -573,7 +573,43 @@ describe('composeServices', () => {
       // expect(category.getValue("BEYOND").serviceName).toEqual("serviceB");
     });
 
-    it('uses most recent type declaration for enums', () => {
+    it('does not error with matching enums across services', () => {
+      const serviceA = {
+        typeDefs: gql`
+          enum ProductCategory {
+            BED
+            BATH
+          }
+        `,
+        name: 'serviceA',
+      };
+
+      const serviceB = {
+        typeDefs: gql`
+          enum ProductCategory {
+            BED
+            BATH
+          }
+        `,
+        name: 'serviceB',
+      };
+
+      const { schema, errors } = composeServices([serviceA, serviceB]);
+      expect(schema).toBeDefined();
+      expect(errors).toMatchInlineSnapshot(`Array []`);
+
+      const category = schema.getType('ProductCategory') as GraphQLEnumType;
+      expect(category).toMatchInlineSnapshot(`
+                enum ProductCategory {
+                  BED
+                  BATH
+                }
+            `);
+
+      expect(category.federation.serviceName).toEqual('serviceB');
+    });
+
+    it('errors when enums in separate services dont match', () => {
       const serviceA = {
         typeDefs: gql`
           enum ProductCategory {
@@ -597,18 +633,118 @@ describe('composeServices', () => {
       expect(schema).toBeDefined();
       expect(errors).toMatchInlineSnapshot(`
                 Array [
-                  [GraphQLError: There can be only one type named "ProductCategory".],
+                  [GraphQLError: Enums do not have the same values across services. Groups of services with matching enum values are: [serviceA], [serviceB]],
                 ]
             `);
 
       const category = schema.getType('ProductCategory') as GraphQLEnumType;
       expect(category).toMatchInlineSnapshot(`
-                enum ProductCategory {
-                  BEYOND
-                }
-            `);
+                                        enum ProductCategory {
+                                          BEYOND
+                                        }
+                              `);
 
       expect(category.federation.serviceName).toEqual('serviceB');
+    });
+
+    it('errors when enums in separate services dont match', () => {
+      const serviceA = {
+        typeDefs: gql`
+          type Query {
+            products: [Product]!
+          }
+
+          type Product @key(fields: "sku") {
+            sku: String!
+            upc: String!
+            type: ProductType
+          }
+
+          enum ProductType {
+            BOOK
+            FURNITURE
+          }
+        `,
+        name: 'serviceA',
+      };
+
+      const serviceB = {
+        typeDefs: gql`
+          enum ProductType {
+            FURNITURE
+            BOOK
+            DIGITAL
+          }
+        `,
+        name: 'serviceB',
+      };
+
+      const serviceC = {
+        typeDefs: gql`
+          enum ProductType {
+            FURNITURE
+            BOOK
+            DIGITAL
+          }
+        `,
+        name: 'serviceC',
+      };
+
+      const { schema, errors } = composeServices([
+        serviceA,
+        serviceB,
+        serviceC,
+      ]);
+      expect(errors).toHaveLength(1);
+      expect(errors).toMatchInlineSnapshot(`
+        Array [
+          [GraphQLError: Enums do not have the same values across services. Groups of services with matching enum values are: [serviceA], [serviceB, serviceC]],
+        ]
+      `);
+    });
+
+    it('errors when an enum name is defined as another type in a service', () => {
+      const serviceA = {
+        typeDefs: gql`
+          enum ProductType {
+            BOOK
+            FURNITURE
+          }
+        `,
+        name: 'serviceA',
+      };
+
+      const serviceB = {
+        typeDefs: gql`
+          type ProductType {
+            id: String
+          }
+        `,
+        name: 'serviceB',
+      };
+
+      const serviceC = {
+        typeDefs: gql`
+          enum ProductType {
+            FURNITURE
+            BOOK
+            DIGITAL
+          }
+        `,
+        name: 'serviceC',
+      };
+
+      const { schema, errors } = composeServices([
+        serviceA,
+        serviceB,
+        serviceC,
+      ]);
+      expect(errors).toHaveLength(1);
+      expect(errors).toMatchInlineSnapshot(`
+        Array [
+          [GraphQLError: [serviceA] ProductType -> ProductType is an enum in [serviceA, serviceC], but not in [serviceB]],
+        ]
+      `);
     });
   });
 
