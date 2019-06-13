@@ -74,3 +74,7 @@ declare module 'graphql/type/definition' {
     federation?: FederationField;
   }
 }
+
+export type FederatedTypeDefinitionNode = TypeDefinitionNode & {
+  serviceName: string | null;
+};
