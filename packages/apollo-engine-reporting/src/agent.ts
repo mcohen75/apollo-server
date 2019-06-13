@@ -82,12 +82,26 @@ export interface EngineReportingOptions<TContext> {
    */
   reportErrorFunction?: (err: Error) => void;
   /**
-   * A case-sensitive list of names of variables whose values should not be sent
-   * to Apollo servers, or 'true' to leave out all variables. In the former
+   * [TO-BE-DEPRECATED] A case-sensitive list of names of variables whose values should
+   * not be sent to Apollo servers, or 'true' to leave out all variables. In the former
    * case, the report will indicate that each private variable was redacted; in
    * the latter case, no variables are sent at all.
    */
   privateVariables?: Array<String> | boolean;
+  /**
+   * A case-sensitive list of names of variables whose values should
+   * not be sent to Apollo servers, a custom function for modifying variable values,
+   * or 'true' v. 'false' to blacklist v. whitelist all variables, respectively. In the first
+   * case, the report will indicate each private variable redacted; in the second,
+   * the report will indicate that variable values were modified by a custom function;
+   * in the final case, the report will indicate whether the variables were all
+   * blacklisted or whitelisted; if null, the report will indicate that no privacy
+   * enforcer was specified.
+   */
+  enforcePrivateVariables?:
+    | ((v: Record<string, any>) => Record<string, any>)
+    | Array<String>
+    | boolean;
   /**
    * A case-insensitive list of names of HTTP headers whose values should not be
    * sent to Apollo servers, or 'true' to leave out all HTTP headers. Unlike

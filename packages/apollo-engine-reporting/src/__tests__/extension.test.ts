@@ -6,7 +6,7 @@ import {
 import { Trace } from 'apollo-engine-reporting-protobuf';
 import { graphql } from 'graphql';
 import { Request } from 'node-fetch';
-import { EngineReportingExtension } from '../extension';
+import { EngineReportingExtension, makeTraceDetails } from '../extension';
 import { InMemoryLRUCache } from 'apollo-server-caching';
 
 test('trace construction', async () => {
@@ -82,4 +82,79 @@ test('trace construction', async () => {
   });
   requestDidEnd();
   // XXX actually write some tests
+});
+
+const variables: Record<string, any> = {
+  testing: 'testing',
+  t2: 2,
+};
+
+test('check variableJson output for privacyEnforcer boolean type', () => {
+  // Case 1: No keys/values in variables to be filtered/not filtered
+  const emptyOutput = new Trace.Details();
+  emptyOutput.privacyEnforcerType =
+    Trace.Details.PrivateVariableEnforcerType.BOOLEAN;
+  expect(makeTraceDetails({}, true)).toEqual(emptyOutput);
+  expect(makeTraceDetails({}, false)).toEqual(emptyOutput);
+
+  // Case 2: Filter all variables (enforce == True)
+  const filteredOutput = new Trace.Details();
+  filteredOutput.privacyEnforcerType =
+    Trace.Details.PrivateVariableEnforcerType.BOOLEAN;
+  Object.keys(variables).forEach(name => {
+    filteredOutput.variablesJson[name] = '';
+  });
+  expect(makeTraceDetails(variables, true)).toEqual(filteredOutput);
+
+  // Case 3: Do not filter variables (enforce == False)
+  const nonFilteredOutput = new Trace.Details();
+  nonFilteredOutput.privacyEnforcerType =
+    Trace.Details.PrivateVariableEnforcerType.BOOLEAN;
+  Object.keys(variables).forEach(name => {
+    nonFilteredOutput.variablesJson[name] = JSON.stringify(variables[name]);
+  });
+  expect(makeTraceDetails(variables, false)).toEqual(nonFilteredOutput);
+});
+
+test('variableJson output for privacyEnforcer Array type', () => {
+  const privacyEnforcerArray: string[] = ['testing', 'notInVariables'];
+  const expectedVariablesJson = {
+    testing: '',
+    t2: JSON.stringify(2),
+  };
+  expect(
+    makeTraceDetails(variables, privacyEnforcerArray).variablesJson,
+  ).toEqual(expectedVariablesJson);
+  expect(
+    makeTraceDetails(variables, privacyEnforcerArray).privacyEnforcerType,
+  ).toEqual(Trace.Details.PrivateVariableEnforcerType.ARRAY);
+});
+
+test('variableJson output for privacyEnforcer custom function', () => {
+  // Custom function that redacts every variable to 100;
+  const modifiedValue = 100;
+  const customEnforcer = (input: Record<string, any>): Record<string, any> => {
+    let out: Record<string, any> = {};
+    Object.keys(input).map((name: string) => {
+      out[name] = modifiedValue;
+    });
+    return out;
+  };
+
+  // Expected output
+  const output = new Trace.Details();
+  output.privacyEnforcerType =
+    Trace.Details.PrivateVariableEnforcerType.FUNCTION;
+  Object.keys(variables).forEach(name => {
+    output.variablesJson[name] = JSON.stringify(modifiedValue);
+  });
+
+  expect(makeTraceDetails(variables, customEnforcer)).toEqual(output);
+});
+
+test('privacyEnforcer=True equivalent to privacyEnforcer=Array(all variables)', () => {
+  let privateVariablesArray: string[] = ['testing', 't2'];
+  expect(makeTraceDetails(variables, true).variablesJson).toEqual(
+    makeTraceDetails(variables, privateVariablesArray).variablesJson,
+  );
 });

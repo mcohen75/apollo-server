@@ -146,41 +146,53 @@ export class EngineReportingExtension<TContext = any>
       }
     }
 
-    if (this.options.privateVariables !== true && o.variables) {
-      // Note: we explicitly do *not* include the details.rawQuery field. The
-      // Engine web app currently does nothing with this other than store it in
-      // the database and offer it up via its GraphQL API, and sending it means
-      // that using calculateSignature to hide sensitive data in the query
-      // string is ineffective.
-      this.trace.details = new Trace.Details();
-      Object.keys(o.variables).forEach(name => {
-        if (
-          this.options.privateVariables &&
-          Array.isArray(this.options.privateVariables) &&
-          // We assume that most users will have only a few private variables,
-          // or will just set privateVariables to true; we can change this
-          // linear-time operation if it causes real performance issues.
-          this.options.privateVariables.includes(name)
-        ) {
-          // Special case for private variables. Note that this is a different
-          // representation from a variable containing the empty string, as that
-          // will be sent as '""'.
-          this.trace.details!.variablesJson![name] = '';
-        } else {
-          try {
-            this.trace.details!.variablesJson![name] = JSON.stringify(
-              o.variables![name],
-            );
-          } catch (e) {
-            // This probably means that the value contains a circular reference,
-            // causing `JSON.stringify()` to throw a TypeError:
-            // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON/stringify#Issue_with_JSON.stringify()_when_serializing_circular_references
-            this.trace.details!.variablesJson![name] = JSON.stringify(
-              '[Unable to convert value to JSON]',
-            );
+
+    if (this.options.privateVariables !== null) {
+      // [TO BE DEPRECATED] to use the parameter enforcePrivateVariables over privateVariables.
+      // If privateVariables was previously specified (non-null), trace.details.variablesJson will
+      // look the same as before.
+      if (this.options.privateVariables !== true && o.variables) {
+        // Note: we explicitly do *not* include the details.rawQuery field. The
+        // Engine web app currently does nothing with this other than store it in
+        // the database and offer it up via its GraphQL API, and sending it means
+        // that using calculateSignature to hide sensitive data in the query
+        // string is ineffective.
+        this.trace.details = new Trace.Details();
+        Object.keys(o.variables).forEach(name => {
+          if (
+              this.options.privateVariables &&
+              Array.isArray(this.options.privateVariables) &&
+              // We assume that most users will have only a few private variables,
+              // or will just set privateVariables to true; we can change this
+              // linear-time operation if it causes real performance issues.
+              this.options.privateVariables.includes(name)
+          ) {
+            // Special case for private variables. Note that this is a different
+            // representation from a variable containing the empty string, as that
+            // will be sent as '""'.
+            this.trace.details!.variablesJson![name] = '';
+          } else {
+            try {
+              this.trace.details!.variablesJson![name] = JSON.stringify(
+                  o.variables![name],
+              );
+            } catch (e) {
+              // This probably means that the value contains a circular reference,
+              // causing `JSON.stringify()` to throw a TypeError:
+              // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON/stringify#Issue_with_JSON.stringify()_when_serializing_circular_references
+              this.trace.details!.variablesJson![name] = JSON.stringify(
+                  '[Unable to convert value to JSON]',
+              );
+            }
           }
-        }
-      });
+        });
+      }
+    } else if (o.variables) {
+      // Default to the enforcePrivateVariables specs if privateVariables was not set.
+      this.trace.details = makeTraceDetails(
+          o.variables,
+          this.options.enforcePrivateVariables,
+      );
     }
 
     const clientInfo = this.generateClientInfo(o.requestContext);
@@ -454,4 +466,70 @@ function defaultGenerateClientInfo({ request }: GraphQLRequestContext) {
   } else {
     return {};
   }
+}
+
+// Creates trace details from request variables, given a policy for modifying
+// values of private or sensitive variables.
+// The details include the variables in the request, and the privacy enforcer type.
+// Defaults to blacklisting all (which is the same logic used for the
+// to-be-deprecated options.privateVariables), except that the redacted variable
+// names will still be visible in the UI.
+export function makeTraceDetails(
+  variables: Record<string, any>,
+  enforcePrivateVariables?:
+    | ((v: Record<string, any>) => Record<string, any>)
+    | Array<String>
+    | boolean,
+): Trace.Details {
+  const details = new Trace.Details();
+  let variablesToRecord = variables;
+  if (typeof enforcePrivateVariables === 'function') {
+    // Custom function to allow user to specify what variablesJson will look like
+    variablesToRecord = enforcePrivateVariables(variables);
+    details.privacyEnforcerType =
+      Trace.Details.PrivateVariableEnforcerType.FUNCTION;
+  } else if (Array.isArray(enforcePrivateVariables)) {
+    details.privacyEnforcerType =
+      Trace.Details.PrivateVariableEnforcerType.ARRAY;
+  } else if (enforcePrivateVariables !== null) {
+    details.privacyEnforcerType =
+      Trace.Details.PrivateVariableEnforcerType.BOOLEAN;
+  } else {
+    details.privacyEnforcerType =
+        Trace.Details.PrivateVariableEnforcerType.NONE;
+  }
+
+  // Note: we explicitly do *not* include the details.rawQuery field. The
+  // Engine web app currently does nothing with this other than store it in
+  // the database and offer it up via its GraphQL API, and sending it means
+  // that using calculateSignature to hide sensitive data in the query
+  // string is ineffective.
+  Object.keys(variablesToRecord).forEach(name => {
+    if (
+      enforcePrivateVariables === true ||
+      (Array.isArray(enforcePrivateVariables) &&
+        // We assume that most users will have only a few private variables,
+        // or will just set privateVariables to true; we can change this
+        // linear-time operation if it causes real performance issues.
+        enforcePrivateVariables.includes(name))
+    ) {
+      // Special case for private variables. Note that this is a different
+      // representation from a variable containing the empty string, as that
+      // will be sent as '""'.
+      details.variablesJson![name] = '';
+    } else {
+      try {
+        details.variablesJson![name] = JSON.stringify(variablesToRecord[name]);
+      } catch (e) {
+        // This probably means that the value contains a circular reference,
+        // causing `JSON.stringify()` to throw a TypeError:
+        // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON/stringify#Issue_with_JSON.stringify()_when_serializing_circular_references
+        details.variablesJson![name] = JSON.stringify(
+          '[Unable to convert value to JSON]',
+        );
+      }
+    }
+  });
+
+  return details;
 }
