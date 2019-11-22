@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@apollo/federation": "file:../apollo-federation",
+    "@types/node-fetch": "^2.5.4",
     "apollo-engine-reporting-protobuf": "file:../apollo-engine-reporting-protobuf",
     "apollo-env": "^0.5.1",
     "apollo-graphql": "^0.3.4",
@@ -30,6 +31,7 @@
     "graphql-extensions": "file:../graphql-extensions",
     "loglevel": "^1.6.1",
     "loglevel-debug": "^0.0.1",
+    "node-fetch": "^2.6.0",
     "pretty-format": "^24.7.0"
   },
   "peerDependencies": {
